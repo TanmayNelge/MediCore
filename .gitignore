@@ -1,0 +1,57 @@
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Python
+_pycache_/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Python virtual environments
+venv/
+.venv/
+env/
+
+# Node.js dependencies
+node_modules/
+
+# Frontend build output
+frontend/dist/
+frontend/build/
+
+# Python-generated model and cache files
+*.joblib
+*.pkl
+*.pickle
+*.cache
+
+# Generated logs
+*.log
+logs/
+
+# IDE and editor files
+.vscode/
+.idea/
+
+# Operating system files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Temporary files
+*.tmp
+*.swp
+*.bak
+
+# Local database dumps and backups
+*.dump
+*.bak.sql
+
+# Keep source SQL scripts tracked
+# Do not ignore database/*.sql
