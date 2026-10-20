@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0a3d34" />
+      <stop offset="50%" stop-color="#0f594a" />
+      <stop offset="100%" stop-color="#14725f" />
+    </linearGradient>
+    <linearGradient id="crossGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2dd4bf" />
+      <stop offset="100%" stop-color="#38bdf8" />
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="1.5" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <!-- Rounded Squircle Badge -->
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#bgGrad)" stroke="#2dd4bf" stroke-width="1.5" stroke-opacity="0.3" />
+
+  <!-- Medical Cross with subtle glow -->
+  <path d="M26 12 h12 v12 h12 v12 h-12 v12 h-12 v-12 h-12 v-12 h12 z"
+        fill="url(#crossGrad)"
+        filter="url(#glow)" />
+
+  <!-- Dynamic ECG heartbeat wave through center -->
+  <path d="M10 32 h11 l2.5 -5 l3.5 11 l3.5 -13 l3.5 10 l2.5 -3 h17"
+        fill="none"
+        stroke="#ffffff"
+        stroke-width="2.2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        opacity="0.95" />
+</svg>
