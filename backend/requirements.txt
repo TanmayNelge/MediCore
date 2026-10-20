@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+oracledb
+pyjwt
+python-multipart
+pandas
+scikit-learn
