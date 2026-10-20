@@ -1,0 +1,29 @@
+-- =====================================================================
+-- 03_sequences.sql
+-- MediCore HCMS - ID sequences. Run BEFORE 01_schema.sql.
+-- =====================================================================
+CREATE SEQUENCE seq_department_id START WITH 1 INCREMENT BY 1;
+CREATE SEQUENCE seq_doctor_id      START WITH 1 INCREMENT BY 1;
+CREATE SEQUENCE seq_nurse_id       START WITH 1 INCREMENT BY 1;
+CREATE SEQUENCE seq_patient_id     START WITH 1 INCREMENT BY 1;
+CREATE SEQUENCE seq_room_bed_id    START WITH 1 INCREMENT BY 1;
+CREATE SEQUENCE seq_schedule_id    START WITH 1 INCREMENT BY 1;
+CREATE SEQUENCE seq_appointment_id START WITH 1 INCREMENT BY 1;
+CREATE SEQUENCE seq_admission_id   START WITH 1 INCREMENT BY 1;
+CREATE SEQUENCE seq_symptom_id     START WITH 1 INCREMENT BY 1;
+CREATE SEQUENCE seq_diagnosis_id   START WITH 1 INCREMENT BY 1;
+CREATE SEQUENCE seq_vital_id       START WITH 1 INCREMENT BY 1;
+CREATE SEQUENCE seq_note_id        START WITH 1 INCREMENT BY 1;
+CREATE SEQUENCE seq_medicine_id    START WITH 1 INCREMENT BY 1;
+CREATE SEQUENCE seq_prescription_id START WITH 1 INCREMENT BY 1;
+CREATE SEQUENCE seq_presc_item_id START WITH 1 INCREMENT BY 1;
+CREATE SEQUENCE seq_labtest_id     START WITH 1 INCREMENT BY 1;
+CREATE SEQUENCE seq_laborder_id    START WITH 1 INCREMENT BY 1;
+CREATE SEQUENCE seq_policy_id      START WITH 1 INCREMENT BY 1;
+CREATE SEQUENCE seq_bill_id        START WITH 1 INCREMENT BY 1;
+CREATE SEQUENCE seq_bill_item_id   START WITH 1 INCREMENT BY 1;
+CREATE SEQUENCE seq_payment_id     START WITH 1 INCREMENT BY 1;
+CREATE SEQUENCE seq_queue_id       START WITH 1 INCREMENT BY 1;
+CREATE SEQUENCE seq_user_id        START WITH 1 INCREMENT BY 1;
+CREATE SEQUENCE seq_audit_id       START WITH 1 INCREMENT BY 1;
+CREATE SEQUENCE seq_prediction_id START WITH 1 INCREMENT BY 1;
