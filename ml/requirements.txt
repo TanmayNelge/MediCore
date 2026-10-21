@@ -1,0 +1,4 @@
+oracledb
+pandas
+scikit-learn
+joblib
