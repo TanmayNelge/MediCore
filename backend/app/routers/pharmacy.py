@@ -9,7 +9,8 @@
 from typing import Optional
 from fastapi import APIRouter, Depends
 from app.db.session import get_connection
-from app.db.helpers import rows_to_dicts
+from app.auth.jwt import AppUser, require_roles
+from app.db.helpers import execute, query, rows_to_dicts
 
 router = APIRouter()
 
@@ -38,7 +39,7 @@ def list_prescriptions(patient_id: Optional[int] = None, conn=Depends(get_connec
     if patient_id:
         sql = """SELECT p.prescription_id, p.patient_id, p.doctor_id, pi.medicine_id,
                         m.medicine_name, pi.dosage, pi.quantity,
-                        TO_CHAR(p.prescribed_date, 'YYYY-MM-DD') AS prescribed_date
+                        TO_CHAR(p.prescribed_date, 'YYYY-MM-DD') AS prescribed_date, p.status
                  FROM prescription p
                  JOIN prescription_item pi ON pi.prescription_id = p.prescription_id
                  JOIN medicine m ON m.medicine_id = pi.medicine_id
@@ -49,7 +50,7 @@ def list_prescriptions(patient_id: Optional[int] = None, conn=Depends(get_connec
     else:
         sql = """SELECT p.prescription_id, p.patient_id, p.doctor_id, pi.medicine_id,
                         m.medicine_name, pi.dosage, pi.quantity,
-                        TO_CHAR(p.prescribed_date, 'YYYY-MM-DD') AS prescribed_date
+                        TO_CHAR(p.prescribed_date, 'YYYY-MM-DD') AS prescribed_date, p.status
                  FROM prescription p
                  JOIN prescription_item pi ON pi.prescription_id = p.prescription_id
                  JOIN medicine m ON m.medicine_id = pi.medicine_id
@@ -76,7 +77,10 @@ def add_prescription(
         patient_id, doctor_id, appointment_id, medicine_id, dosage, duration_days, quantity, out_id,
     ])
     conn.commit()
-    return {"sql_executed": "CALL add_prescription(...)", "prescription_id": out_id.getvalue()}
+    raw = out_id.getvalue()
+    return {"sql_executed": f"BEGIN add_prescription({patient_id}, {doctor_id}, {appointment_id or 'NULL'}, {medicine_id}, "
+                            f"'{dosage}', {duration_days}, {quantity}, :out); END;",
+            "prescription_id": raw[0] if isinstance(raw, list) else raw}
 
 
 @router.put("/pharmacy/medicine/{medicine_id}/stock")
@@ -91,3 +95,29 @@ def adjust_stock(medicine_id: int, stock_quantity: int, conn=Depends(get_connect
         "sql_executed": sql.replace(":qty", str(stock_quantity)).replace(":mid", str(medicine_id)),
         "rows_updated": cursor.rowcount,
     }
+
+
+@router.post("/pharmacy/medicines")
+def add_medicine(medicine_code: str, medicine_name: str, unit_price: float, stock_quantity: int = 0,
+                 category: Optional[str] = None, reorder_level: int = 20, expiry_date: Optional[str] = None,
+                 conn=Depends(get_connection), user: AppUser = Depends(require_roles("ADMIN", "PHARMACY"))):
+    """INSERT into MEDICINE (UNIQUE medicine_code, CHECK unit_price >= 0)."""
+    return execute(conn, """INSERT INTO medicine (medicine_code, medicine_name, category, unit_price,
+                                                  stock_quantity, reorder_level, expiry_date)
+                            VALUES (:code, :mname, :cat, :price, :stock, :reorder, TO_DATE(:exp, 'YYYY-MM-DD'))""",
+                   {"code": medicine_code.strip().upper(), "mname": medicine_name.strip(), "cat": category or None,
+                    "price": unit_price, "stock": stock_quantity, "reorder": reorder_level, "exp": expiry_date or None})
+
+
+@router.delete("/pharmacy/medicines/{medicine_id}")
+def delete_medicine(medicine_id: int, conn=Depends(get_connection), user: AppUser = Depends(require_roles("ADMIN"))):
+    """DELETE - refused by Oracle (ORA-02292) if the medicine was ever prescribed."""
+    return execute(conn, "DELETE FROM medicine WHERE medicine_id = :mid", {"mid": medicine_id})
+
+
+@router.put("/pharmacy/prescriptions/{prescription_id}/fulfil")
+def fulfil(prescription_id: int, conn=Depends(get_connection),
+           user: AppUser = Depends(require_roles("ADMIN", "PHARMACY"))):
+    """Column-level privilege demo: pharmacy_role may UPDATE only prescription.status."""
+    return execute(conn, "UPDATE prescription SET status = 'FULFILLED' WHERE prescription_id = :pid AND status = 'ACTIVE'",
+                   {"pid": prescription_id})

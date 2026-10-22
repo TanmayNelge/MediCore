@@ -1,4 +1,6 @@
 import { useMemo, useState, useCallback } from "react";
+import { Link } from "react-router-dom";
+import DataTable from "../components/DataTable";
 import { useAuth } from "../AuthContext";
 import { apiFetch } from "../api";
 import { useApi } from "../lib/useApi";
@@ -53,6 +55,11 @@ export default function SchemaViewerPage() {
   const [query, setQuery] = useState("");
   const fetcher = useCallback((token) => apiFetch("/schema/columns", { token }), []);
   const { data, loading, error, reload } = useApi(fetcher);
+  const objFetcher = useCallback((token) => apiFetch("/schema/objects", { token }), []);
+  const objects = useApi(objFetcher);
+  const [tab, setTab] = useState("tables");
+  const TABS = [["tables", "Tables & columns"], ["views", "Views"], ["indexes", "Indexes"], ["triggers", "Triggers"],
+                ["plsql", "Procedures / functions / packages"], ["sequences", "Sequences"], ["constraints", "Constraints"]];
 
   const byTable = useMemo(() => {
     const map = {};
@@ -76,7 +83,7 @@ export default function SchemaViewerPage() {
     <div>
       <PageHeader
         title="Schema viewer"
-        subtitle="Live from Oracle's data dictionary — never hardcoded, never drifts."
+        subtitle={`Live from Oracle's data dictionary (ALL_TAB_COLUMNS, ALL_CONSTRAINTS, ALL_TRIGGERS …) — never hardcoded. You see what your Oracle role (${auth?.username}) is allowed to see.`}
         actions={
           <button className="inline-flex items-center gap-1.5 bg-surface border border-border-strong text-accent-strong rounded-md px-3 py-2 text-sm hover:bg-accent-soft transition-colors disabled:opacity-50" onClick={reload} disabled={loading}>
             <RefreshCw size={15} /> Refresh
@@ -84,6 +91,29 @@ export default function SchemaViewerPage() {
         }
       />
 
+      <div className="flex gap-1.5 flex-wrap mb-4">
+        {TABS.map(([k, label]) => (
+          <button key={k} onClick={() => setTab(k)}
+            className={`rounded-md px-3 py-1.5 text-sm border transition-colors ${tab === k ? "bg-accent text-white border-accent" : "bg-surface border-border-strong text-accent-strong hover:bg-accent-soft"}`}>
+            {label}{k !== "tables" && objects.data?.[k] ? ` (${objects.data[k].length})` : k === "tables" ? ` (${Object.keys(byTable).length})` : ""}
+          </button>
+        ))}
+        <Link to="/er-model" className="rounded-md px-3 py-1.5 text-sm border border-border-strong text-ink-soft hover:bg-accent-soft ml-auto">View ER diagram →</Link>
+        <Link to="/normalization" className="rounded-md px-3 py-1.5 text-sm border border-border-strong text-ink-soft hover:bg-accent-soft">Keys & normalization →</Link>
+      </div>
+
+      {tab !== "tables" && (
+        <div className="bg-surface border border-border rounded-xl p-5 mb-5 shadow-sm">
+          {objects.loading && !objects.data && <div className="h-24 bg-surface-3 rounded animate-pulse" />}
+          {objects.error && <p className="text-urgent">{objects.error}</p>}
+          {objects.data && <>
+            <DataTable rows={objects.data[tab]} filename={`${tab}.csv`} maxHeight={600} />
+            <SqlPanel sql={objects.data.sql_executed} />
+          </>}
+        </div>
+      )}
+
+      {tab === "tables" && <>
       <div className="bg-surface border border-border rounded-xl p-4 mb-5 shadow-sm">
         <div className="flex items-center gap-2.5">
           <Search size={16} className="text-ink-muted" />
@@ -116,6 +146,7 @@ export default function SchemaViewerPage() {
       )}
 
       {data && <SqlPanel sql={data.sql_executed} />}
+      </>}
     </div>
   );
 }
