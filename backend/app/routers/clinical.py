@@ -31,25 +31,33 @@ def patient_summary(patient_id: int, conn=Depends(get_connection)):
     }
 
 
+@router.get("/clinical/diseases")
+def list_diseases(conn=Depends(get_connection)):
+    """DISEASE reference table (ICD-10 code -> name)."""
+    sql = "SELECT disease_code, disease_name, is_chronic FROM disease ORDER BY disease_name"
+    cursor = conn.cursor()
+    cursor.execute(sql)
+    return {"sql_executed": sql, "results": rows_to_dicts(cursor, cursor.fetchall())}
+
+
 @router.post("/clinical/diagnosis")
 def add_diagnosis(
-    patient_id: int, doctor_id: int, disease_name: str,
-    appointment_id: int = None, admission_id: int = None,
-    disease_code: str = None, severity: str = None,
+    patient_id: int, doctor_id: int, disease_code: str,
+    appointment_id: int = None, admission_id: int = None, severity: str = None,
     conn=Depends(get_connection),
 ):
-    """One and only one of appointment_id / admission_id must be set
-    (chk_diag_one_encounter, Phase 4.3)."""
+    """Exactly one of appointment_id / admission_id (chk_diag_one_encounter);
+    disease_code must exist in DISEASE (FK); trg_diagnosis_encounter_chk
+    rejects an encounter that belongs to another patient."""
     cursor = conn.cursor()
     out_id = cursor.var(int)
-    sql = """INSERT INTO diagnosis (patient_id, doctor_id, appointment_id, admission_id,
-                                     disease_name, disease_code, severity)
-             VALUES (:pid, :did, :aid, :adm, :dname, :dcode, :sev)
+    sql = """INSERT INTO diagnosis (patient_id, doctor_id, appointment_id, admission_id, disease_code, severity)
+             VALUES (:pid, :did, :aid, :adm, :dcode, :sev)
              RETURNING diagnosis_id INTO :out_id"""
     cursor.execute(sql, pid=patient_id, did=doctor_id, aid=appointment_id, adm=admission_id,
-                    dname=disease_name, dcode=disease_code, sev=severity, out_id=out_id)
+                   dcode=disease_code.strip().upper(), sev=severity, out_id=out_id)
     conn.commit()
-    return {"sql_executed": "INSERT INTO diagnosis (...)", "diagnosis_id": _scalar(out_id)}
+    return {"sql_executed": sql, "diagnosis_id": _scalar(out_id)}
 
 
 @router.get("/clinical/notes")

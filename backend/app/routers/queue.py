@@ -92,3 +92,17 @@ def opd_wait_estimate(conn=Depends(get_connection)):
               WHERE queue_type = 'OPD' AND status = 'WAITING' AND queue_date = TRUNC(SYSDATE)"""
     cursor.execute(sql)
     return {"sql_executed": sql, "results": rows_to_dicts(cursor, cursor.fetchall())}
+
+
+@router.get("/queue/today")
+def queue_today(queue_type: str = None, conn=Depends(get_connection)):
+    """All of today's tokens, priority-then-FIFO order (the order get_next_patient uses)."""
+    from app.db.helpers import query
+    sql = """SELECT q.queue_id, q.queue_type, q.queue_number, q.patient_id, q.priority_level, q.status,
+                    TO_CHAR(q.arrival_time, 'HH24:MI') AS arrived, TO_CHAR(q.called_time, 'HH24:MI') AS called,
+                    ROUND((CAST(NVL(q.called_time, SYSTIMESTAMP) AS DATE) - CAST(q.arrival_time AS DATE)) * 1440) AS wait_minutes
+               FROM service_queue q
+              WHERE q.queue_date = TRUNC(SYSDATE) AND (:qt IS NULL OR q.queue_type = :qt)
+              ORDER BY CASE q.status WHEN 'WAITING' THEN 0 WHEN 'CALLED' THEN 1 ELSE 2 END,
+                       q.priority_level, q.arrival_time"""
+    return query(conn, sql, {"qt": queue_type})
