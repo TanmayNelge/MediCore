@@ -1,68 +1,150 @@
 # app/routers/ml_insights.py
-# Phase 13.5 / 16.2 -- read-only, reads only from ML_PREDICTION. Never
-# triggers training or writes anything -- that's the offline/batch scripts
-# in ml/ (extract.py, train.py, evaluate.py, predict_and_store.py).
+# AI/ML integration (Front end -> API -> Oracle -> model -> Oracle -> UI)
+#
+#   GET  /ml-insights/predictions          upcoming appointments + risk (vw_upcoming_noshow_risk)
+#   GET  /ml-insights/model-summary        active model metrics from ML_MODEL_RUN (DB) + report
+#   GET  /ml-insights/runs                 model registry history
+#   POST /ml-insights/score/{appt_id}      LIVE prediction for one appointment (features computed
+#                                          in Oracle by the same SQL used for training)
+#   POST /ml-insights/rescore              re-score all upcoming appointments  (ADMIN / RECEPTIONIST)
+#   POST /ml-insights/retrain              full retrain + evaluation + registration (ADMIN)
+#
+# Reads use the READ-ONLY connection; writes (rescore / retrain) use admin1,
+# whose ADMIN_ROLE may write ML_MODEL_RUN / ML_PREDICTION.
 
+import json
 import os
-import joblib
-from fastapi import APIRouter, Depends
-from app.db.session import get_readonly_connection
-from app.db.helpers import rows_to_dicts
+import sys
+import threading
+
+from fastapi import APIRouter, Depends, HTTPException
+
+from app.auth.jwt import AppUser, require_roles
+from app.db.helpers import query
+from app.db.session import get_admin_connection, get_readonly_connection
 
 router = APIRouter()
 
+_ML_DIR = next((p for p in [
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "ml")),
+    os.path.abspath(os.path.join(os.getcwd(), "..", "ml")),
+    os.path.abspath(os.path.join(os.getcwd(), "ml")),
+] if os.path.isdir(p)), None)
+if _ML_DIR and _ML_DIR not in sys.path:
+    sys.path.insert(0, _ML_DIR)
+
+_MODEL_PATH = os.path.join(_ML_DIR, "no_show_model.joblib") if _ML_DIR else None
+_cache = {"mtime": None, "bundle": None}
+_train_lock = threading.Lock()
+
+
+def _bundle():
+    if not _MODEL_PATH or not os.path.exists(_MODEL_PATH):
+        raise HTTPException(404, "No trained model found. Run ml/run_pipeline.py (or 4_run_ml.ps1) first.")
+    mtime = os.path.getmtime(_MODEL_PATH)
+    if _cache["mtime"] != mtime:
+        import joblib
+        b = joblib.load(_MODEL_PATH)
+        if "pipeline" not in b:
+            raise HTTPException(409, "Saved model is from the old v1 pipeline - retrain with ml/run_pipeline.py.")
+        _cache.update(mtime=mtime, bundle=b)
+    return _cache["bundle"]
+
 
 @router.get("/ml-insights/predictions")
-def upcoming_predictions(conn=Depends(get_readonly_connection)):
-    cursor = conn.cursor()
-    sql = """SELECT p.first_name || ' ' || p.last_name AS patient,
-                    TO_CHAR(a.appt_date, 'YYYY-MM-DD') AS appt_date,
-                    a.appt_time,
-                    d.first_name || ' ' || d.last_name AS doctor_name,
-                    dep.department_name,
-                    mp.prediction,
-                    ROUND(mp.probability, 4) AS probability,
-                    mp.model_name,
-                    mp.model_version
-             FROM ml_prediction mp
-             JOIN patient p ON p.patient_id = mp.patient_id
-             JOIN appointment a ON a.appointment_id = mp.appointment_id
-             LEFT JOIN doctor d ON d.doctor_id = a.doctor_id
-             LEFT JOIN department dep ON dep.department_id = d.department_id
-             WHERE a.appt_date >= TRUNC(SYSDATE) OR a.status = 'SCHEDULED'
-             ORDER BY mp.probability DESC"""
-    cursor.execute(sql)
-    return {
-        "sql_executed": sql,
-        "results": rows_to_dicts(cursor, cursor.fetchall()),
-        "disclaimer": "Decision-support estimate only — not a medical diagnosis.",
-    }
+def upcoming_predictions(risk_band: str = None, conn=Depends(get_readonly_connection)):
+    sql = """SELECT appointment_id, TO_CHAR(appt_date, 'YYYY-MM-DD') AS appt_date, appt_time,
+                    patient_id, patient_name AS patient, phone, doctor_name, department_name,
+                    prediction, ROUND(probability, 4) AS probability, risk_band, risk_factors,
+                    model_name, model_version
+               FROM vw_upcoming_noshow_risk
+              WHERE (:band IS NULL OR risk_band = :band)
+              ORDER BY probability DESC"""
+    res = query(conn, sql, {"band": risk_band.upper() if risk_band else None})
+    res["disclaimer"] = "Decision-support estimate only - not a medical judgement."
+    return res
 
 
 @router.get("/ml-insights/model-summary")
-def model_summary():
-    """Returns evaluation metrics and feature importance of the active persisted model."""
-    candidate_paths = [
-        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "ml", "no_show_model.joblib")),
-        os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "ml", "no_show_model.joblib")),
-        os.path.abspath(os.path.join(os.getcwd(), "ml", "no_show_model.joblib")),
-        os.path.abspath(os.path.join(os.getcwd(), "..", "ml", "no_show_model.joblib")),
-    ]
-    model_path = next((p for p in candidate_paths if os.path.exists(p)), None)
-    if model_path:
-        try:
-            bundle = joblib.load(model_path)
-            return {
-                "available": True,
-                "model_name": bundle.get("model_name", "Classification Model"),
-                "model_version": bundle.get("model_version", "1.0"),
-                "metrics": bundle.get("metrics", {}),
-                "features": bundle.get("feature_cols", []),
-            }
-        except Exception as e:
-            return {"available": False, "message": str(e)}
+def model_summary(conn=Depends(get_readonly_connection)):
+    """The ACTIVE model, read from the model registry table in Oracle."""
+    res = query(conn, """SELECT run_id, model_name, model_version, TO_CHAR(trained_at, 'YYYY-MM-DD HH24:MI') AS trained_at,
+                                train_rows, test_rows, TO_CHAR(train_from, 'YYYY-MM-DD') AS train_from,
+                                TO_CHAR(train_to, 'YYYY-MM-DD') AS train_to, TO_CHAR(test_from, 'YYYY-MM-DD') AS test_from,
+                                TO_CHAR(test_to, 'YYYY-MM-DD') AS test_to, threshold, roc_auc, pr_auc, accuracy,
+                                precision_score, recall_score, f1_score, brier_score, metrics_json
+                           FROM ml_model_run WHERE is_active = 'Y'""")
+    if not res["results"]:
+        return {"available": False, "sql_executed": res["sql_executed"],
+                "message": "No active model registered in ML_MODEL_RUN. Run 4_run_ml.ps1 "
+                           "(python ml/run_pipeline.py) - or press 'Retrain' as admin1."}
+    row = res["results"][0]
+    report = json.loads(row.pop("metrics_json") or "{}")
+    return {"available": True, "run": row, "report": report, "sql_executed": res["sql_executed"],
+            "features": (_cache["bundle"] or {}).get("features") if _cache["bundle"] else None}
+
+
+@router.get("/ml-insights/runs")
+def runs(conn=Depends(get_readonly_connection)):
+    return query(conn, """SELECT run_id, model_name, model_version, TO_CHAR(trained_at, 'YYYY-MM-DD HH24:MI') AS trained_at,
+                                 train_rows, test_rows, threshold, roc_auc, pr_auc, precision_score, recall_score,
+                                 f1_score, is_active,
+                                 (SELECT COUNT(*) FROM ml_prediction p WHERE p.run_id = r.run_id) AS predictions
+                            FROM ml_model_run r ORDER BY run_id DESC""")
+
+
+@router.post("/ml-insights/score/{appointment_id}")
+def score_one(appointment_id: int, conn=Depends(get_readonly_connection)):
+    """Live inference: Oracle computes the features for this appointment,
+    the saved sklearn Pipeline (pre-processing + model) scores it, and the
+    occlusion explainer says which features drive the risk. Nothing is
+    written - use /rescore to store predictions."""
+    from features import FEATURE_LABELS, SINGLE_WHERE, fetch
+    from predict_and_store import score_frame
+    b = _bundle()
+    df = fetch(conn, SINGLE_WHERE, appt_id=appointment_id)
+    if df.empty:
+        raise HTTPException(404, f"Appointment {appointment_id} not found")
+    proba, labels, reasons = score_frame(b, df)
+    row = df.iloc[0]
+    feats = {FEATURE_LABELS.get(f, f): (row[f].item() if hasattr(row[f], "item") else row[f]) for f in b["features"]}
     return {
-        "available": False,
-        "message": "No trained model found on disk. Run ml/run_pipeline.py to train and evaluate.",
+        "appointment_id": appointment_id, "status": row["status"],
+        "probability": round(float(proba[0]), 4), "prediction": labels[0], "threshold": b["threshold"],
+        "risk_factors": reasons[0], "features": feats, "model_name": b["model_name"],
+        "model_version": b.get("model_version"),
+        "sql_executed": "-- features computed in Oracle (ml/features.py FEATURE_SQL)\n" +
+                        b["feature_sql"].split(" WHERE a.status")[0].strip() + f"\n WHERE a.appointment_id = {appointment_id}",
+        "note": "Only meaningful for SCHEDULED appointments; for past visits the true outcome is already known."
+                if row["status"] != "SCHEDULED" else None,
     }
 
+
+@router.post("/ml-insights/rescore")
+def rescore(conn=Depends(get_admin_connection), user: AppUser = Depends(require_roles("ADMIN", "RECEPTIONIST"))):
+    from predict_and_store import predict_and_store
+    from run_pipeline import ensure_registered
+    b = ensure_registered(conn, _bundle())
+    n = predict_and_store(conn, b)
+    _cache["mtime"] = None
+    return {"scored": n, "run_id": b["run_id"], "sql_executed": "MERGE INTO ml_prediction ... (executemany, see ml/predict_and_store.py)"}
+
+
+@router.post("/ml-insights/retrain")
+def retrain(conn=Depends(get_admin_connection), user: AppUser = Depends(require_roles("ADMIN"))):
+    """Extract -> CV-compare 4 models -> evaluate on the most recent 20 % ->
+    register in ML_MODEL_RUN (atomic switch of the active model) -> save ->
+    MERGE predictions. Takes ~10-30 s."""
+    if not _train_lock.acquire(blocking=False):
+        raise HTTPException(409, "A retraining run is already in progress.")
+    try:
+        from predict_and_store import predict_and_store
+        from run_pipeline import train_and_register
+        b = train_and_register(conn, verbose=False)
+        n = predict_and_store(conn, b)
+        _cache["mtime"] = None
+        return {"run_id": b["run_id"], "model_name": b["model_name"], "model_version": b["model_version"],
+                "metrics": {k: v for k, v in b["metrics"].items() if k != "roc_curve"},
+                "comparison": b["comparison"], "scored": n}
+    finally:
+        _train_lock.release()

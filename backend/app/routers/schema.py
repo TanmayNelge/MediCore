@@ -60,3 +60,33 @@ def schema_relationships(conn=Depends(get_connection)):
     WHERE c.constraint_type = 'R' AND a.owner = '{_OWNER}'"""
     cursor.execute(sql)
     return {"sql_executed": sql, "results": rows_to_dicts(cursor, cursor.fetchall())}
+
+
+@router.get("/schema/objects")
+def schema_objects(conn=Depends(get_connection)):
+    """Views, indexes, triggers, PL/SQL units, sequences and constraint
+    counts - all from Oracle's data dictionary (what YOUR role can see)."""
+    from app.db.helpers import rows_to_dicts
+    cur = conn.cursor()
+    out = {}
+    queries = {
+        "views": "SELECT view_name AS name, text_length FROM all_views WHERE owner = :o ORDER BY view_name",
+        "indexes": """SELECT i.index_name AS name, i.table_name, i.uniqueness, i.index_type,
+                             LISTAGG(c.column_name, ', ') WITHIN GROUP (ORDER BY c.column_position) AS columns
+                        FROM all_indexes i JOIN all_ind_columns c ON c.index_owner = i.owner AND c.index_name = i.index_name
+                       WHERE i.owner = :o GROUP BY i.index_name, i.table_name, i.uniqueness, i.index_type
+                       ORDER BY i.table_name, i.index_name""",
+        "triggers": """SELECT trigger_name AS name, table_name, trigger_type, triggering_event, status
+                         FROM all_triggers WHERE owner = :o ORDER BY table_name, trigger_name""",
+        "plsql": """SELECT object_name AS name, object_type, status FROM all_objects
+                     WHERE owner = :o AND object_type IN ('PROCEDURE','FUNCTION','PACKAGE') ORDER BY object_type, object_name""",
+        "sequences": "SELECT sequence_name AS name, last_number FROM all_sequences WHERE sequence_owner = :o ORDER BY sequence_name",
+        "constraints": """SELECT table_name, constraint_type, COUNT(*) AS n FROM all_constraints
+                           WHERE owner = :o AND constraint_name NOT LIKE 'BIN$%' GROUP BY table_name, constraint_type
+                           ORDER BY table_name, constraint_type""",
+    }
+    for key, sql in queries.items():
+        cur.execute(sql, o=_OWNER)
+        out[key] = rows_to_dicts(cur, cur.fetchall())
+    return {"sql_executed": "\n\n".join(q.replace(":o", f"'{_OWNER}'") for q in queries.values()),
+            "db_user": conn.username, **out}
